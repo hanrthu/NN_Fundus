@@ -95,7 +95,7 @@ def inference(model, X): # Test Process
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # print(device)
+    print(device)
     if not os.path.exists(args.train_dir):
         os.mkdir(args.train_dir)
     if args.is_train:
