@@ -16,4 +16,7 @@ class inception_v3(nn.Module):
     def forward(self,x,y):
         results = self.model(x)
         loss = self.loss(results,y)
-        return loss,results
+        pred = torch.argmax(logits, 1)
+        correct_pred = (pred.int() == y.int())
+        acc = torch.mean(correct_pred.float())
+        return loss,acc
