@@ -15,7 +15,7 @@ class inception_v3(nn.Module):
         self.loss = nn.CrossEntropyLoss()
     def forward(self,x,y):
         results = self.model(x)
-        print(results.shape)
-        print(y.shape)
+        # print(results.shape)
+        # print(y.shape)
         loss = self.loss(results,y)
         return loss,results
