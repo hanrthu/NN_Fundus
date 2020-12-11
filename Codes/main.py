@@ -5,6 +5,7 @@ import torch
 import os
 import torch.optim as optim
 import time
+import numpy as np
 from data_process import load_fundus
 
 parser = argparse.ArgumentParser()
