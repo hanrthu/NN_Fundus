@@ -1,170 +1,213 @@
-from torchvision import models
-from inception import inception_v3
-import argparse
+import torchvision
+from torchvision import transforms
 import torch
-import os
-import torch.optim as optim
-import time
+from torch import optim
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import cv2
 import numpy as np
-from data_process import load_fundus
+import random
+from sklearn.metrics import roc_auc_score
+from data_process import load_data, myDataset
+from model import resnet, inception, SEnet
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--batch_size', type=int, default=64,
-    help='Batch size for mini-batch training and evaluating. Default: 64')
-parser.add_argument('--num_epochs', type=int, default=100,
-    help='Number of training epoch. Default: 20')
-parser.add_argument('--learning_rate', type=float, default=1e-3,
-    help='Learning rate during optimization. Default: 1e-3')
-parser.add_argument('--drop_rate', type=float, default=0.5,
-    help='Drop rate of the Dropout Layer. Default: 0.5')
-parser.add_argument('--is_train', type=bool, default=True,
-    help='True to train and False to inference. Default: True')
-parser.add_argument('--data_dir', type=str, default='../images',
-    help='Data directory. Default: ../images')
-parser.add_argument('--label',type=str,default='../data.csv',
-    help='Label file.Default:../data.csv')
-parser.add_argument('--train_dir', type=str, default='./train',
-    help='Training directory for saving model. Default: ./train')
-parser.add_argument('--inference_version', type=int, default=0,
-    help='The version for inference. Set 0 to use latest checkpoint. Default: 0')
+import argparse
+import os
+import logging
+import time
+
+parser = argparse.ArgumentParser(description='resnet')
+parser.add_argument('--expname', type=str, default="null", help='Experiment name.')
+parser.add_argument('--model', default='resnet50', choices=['resnet18', 'resnet50', 'inception', 'senet18', 'senet50'], help="model name")
+parser.add_argument('--batchsize', default=32, type=int, help='batch size when training')
+parser.add_argument('--gpu', default=0, type=int, help='gpu id, -1 means using cpu')
+parser.add_argument('--weight_decay', default=0.0, type=float, help='L2 regularizer coeficient')
+parser.add_argument('--lr', default=0.005, type=float, help='learning rate')
+parser.add_argument('--start_epoch', default=0, type=int, help='start_epoch')
+parser.add_argument('--num_epochs', default=50, type=int, help='number of epochs')
+parser.add_argument('--dataset_dir', type=str, default='../fundus_hbp', help='Dataset directory')
+parser.add_argument('--loadnpy', action="store_true", default=False, help='load from existing npy file')
+parser.add_argument('--npydir', type=str, default='baseline', help='npy file directory')
+parser.add_argument('-c', '--continue_train', action="store_true", default=False, help='continue to train')
+parser.add_argument('-n', '--normalization', action="store_true", default=False, help='use subtractive normalization technique')
+parser.add_argument('-a', '--augmentation', action="store_true", default=False, help='use data augmentation')
+parser.add_argument('--no_pretrain', action="store_true", default=False, help='do not use pretrained weights')
+parser.add_argument('--stack', action="store_true", default=False, help='stack both eyes into one image of 6 channels')
+parser.add_argument('--resize_shape', default=224, type=int, help='input image shape, -1 means using original shape')
+
+
 args = parser.parse_args()
+curtime = time.strftime('%Y_%m%d_%H%M%S', time.localtime(time.time()))
+if args.expname == "null":
+    args.expname = curtime
+if not os.path.exists("exps"):
+    os.mkdir("exps")
+if not os.path.exists("npys"):
+    os.mkdir("npys")
+if not os.path.exists(os.path.join("exps", args.expname)):
+    os.mkdir(os.path.join("exps", args.expname))
+if not os.path.exists(os.path.join("npys", args.npydir)):
+    os.mkdir(os.path.join("npys", args.npydir))
+
+# set logger
+logpath = os.path.join("exps", args.expname, "log.txt")
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+
+fh = logging.FileHandler(logpath, mode='a')
+fh.setLevel(logging.INFO)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+logger.addHandler(fh)
+logger.addHandler(ch)
 
 
-def shuffle(X, y, shuffle_parts):
-    chunk_size = int(len(X) / shuffle_parts)
-    shuffled_range = list(range(chunk_size))
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
 
-    X_buffer = np.copy(X[0:chunk_size])
-    y_buffer = np.copy(y[0:chunk_size])
-
-    for k in range(shuffle_parts):
-        np.random.shuffle(shuffled_range)
-        for i in range(chunk_size):
-            X_buffer[i] = X[k * chunk_size + shuffled_range[i]]
-            y_buffer[i] = y[k * chunk_size + shuffled_range[i]]
-
-        X[k * chunk_size:(k + 1) * chunk_size] = X_buffer
-        y[k * chunk_size:(k + 1) * chunk_size] = y_buffer
-
-    return X, y
+def parselog(args, logger):
+    for k, v in vars(args).items():
+        logger.info('%s: %s' % (k, str(v)))
 
 
-def train_epoch(model,X,y,optimizer):
-    model.train()
-    loss, acc = 0.0, 0.0
-    st, ed, times = 0, args.batch_size, 0
-    while st < len(X) and ed <= len(X):
+def calc_acc(predictions, labels):
+    result = torch.max(predictions, 1)[1]
+    corrects = (result.data == labels.data).sum()
+    acc = float(corrects)/labels.shape[0]
+    return acc
+
+def train_epoch(model, dataloader, optimizer, device):
+    losses = []
+    accs = []
+    aucs = []
+    for i, batch in enumerate(dataloader):
+        X_batch, Y_batch = batch
+        X_batch = X_batch.to(device)
+        Y_batch = Y_batch.to(device)
         optimizer.zero_grad()
-        X_batch, y_batch = torch.from_numpy(X[st:ed]).to(device), torch.from_numpy(y[st:ed]).to(device)
-        loss_, acc_ = model(X_batch, y_batch)
-
-        loss_.backward()
+        output = model(X_batch)
+        loss = F.cross_entropy(output, Y_batch)
+        loss.backward()
         optimizer.step()
+        
+        losses.append(loss.cpu().detach())
+        proba = np.array(F.softmax(output, dim=-1)[:, 1].cpu().detach())
+        model.eval()
+        acc = calc_acc(output, Y_batch)
+        try:
+            auc = roc_auc_score(Y_batch.cpu(), proba)
+            accs.append(acc)
+            aucs.append(auc)
+        except ValueError:
+            pass
+        model.train()
 
-        loss += loss_.cpu().data.numpy()
-        acc += acc_.cpu().data.numpy()
-        st, ed = ed, ed + args.batch_size
-        times += 1
-    loss /= times
-    acc /= times
-    return acc, loss
+    return np.array(losses).mean(), np.array(accs).mean(), np.array(aucs).mean()
 
-
-def valid_epoch(model, X, y): # Valid Process
+def valid_epoch(model, dataloader, device):
     model.eval()
-    loss, acc = 0.0, 0.0
-    st, ed, times = 0, args.batch_size, 0
-    while st < len(X) and ed <= len(X):
-        X_batch, y_batch = torch.from_numpy(X[st:ed]).to(device), torch.from_numpy(y[st:ed]).to(device)
-        loss_, acc_ = model(X_batch, y_batch)
+    losses = []
+    accs = []
+    aucs = []
+    for i, batch in enumerate(dataloader):
+        X_batch, Y_batch = batch
+        X_batch = X_batch.to(device)
+        Y_batch = Y_batch.to(device)
+        output = model(X_batch)
+        loss = F.cross_entropy(output, Y_batch)
+        
+        losses.append(loss.cpu().detach())
+        proba = np.array(F.softmax(output, dim=-1)[:, 1].cpu().detach())
+        acc = calc_acc(output, Y_batch)
+        try:
+            auc = roc_auc_score(Y_batch.cpu(), proba)
+            accs.append(acc)
+            aucs.append(auc)
+        except ValueError:
+            pass
 
-        loss += loss_.cpu().data.numpy()
-        acc += acc_.cpu().data.numpy()
-
-        st, ed = ed, ed + args.batch_size
-        times += 1
-    loss /= times
-    acc /= times
-    return acc, loss
-
-
-def inference(model, X): # Test Process
-    model.eval()
-    pred_ = model(torch.from_numpy(X).to(device))
-    return pred_.cpu().data.numpy()
+    model.train()    
+    return np.array(losses).mean(), np.array(accs).mean(), np.array(aucs).mean()
 
 
 if __name__ == '__main__':
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
-    if not os.path.exists(args.train_dir):
-        os.mkdir(args.train_dir)
-    if args.is_train:
-        X_train, X_test, y_train, y_test = load_fundus(args.data_dir,args.label)
-        X_val, y_val = X_train[1600:], y_train[1600:]
-        X_train, y_train = X_train[:1600], y_train[:1600]
-        model = inception_v3()
-        model.to(device)
-        print(model)
-        update_parameters = []
-        print("params to update:")
-        for name,param in model.named_parameters():
-            if param.requires_grad == True:
-                update_parameters.append(param)
-                print('\t',name)
-        
-        optimizer = optim.Adam(update_parameters, lr=args.learning_rate)
-
-        pre_losses = [1e18] * 3
-        best_val_acc = 0.0
-        for epoch in range(1, args.num_epochs+1):
-            start_time = time.time()
-            train_acc, train_loss = train_epoch(model, X_train, y_train, optimizer)
-            X_train, y_train = shuffle(X_train, y_train, 1)
-
-            val_acc, val_loss = valid_epoch(model, X_val, y_val)
-
-            if val_acc >= best_val_acc:
-                best_val_acc = val_acc
-                best_epoch = epoch
-                test_acc, test_loss = valid_epoch(model, X_test, y_test)
-                with open(os.path.join(args.train_dir, 'checkpoint_{}.pth.tar'.format(epoch)), 'wb') as fout:
-                    torch.save(model, fout)
-                with open(os.path.join(args.train_dir, 'checkpoint_0.pth.tar'), 'wb') as fout:
-                    torch.save(model, fout)
-
-            epoch_time = time.time() - start_time
-            # f.write(str(train_acc) + " " + str(train_loss) + " " + str(val_acc) + " " + str(val_loss) + "\n")
-            print("Epoch " + str(epoch) + " of " + str(args.num_epochs) + " took " + str(epoch_time) + "s")
-            print("  learning rate:                 " + str(optimizer.param_groups[0]['lr']))
-            print("  training loss:                 " + str(train_loss))
-            print("  training accuracy:             " + str(train_acc))
-            print("  validation loss:               " + str(val_loss))
-            print("  validation accuracy:           " + str(val_acc))
-            print("  best epoch:                    " + str(best_epoch))
-            print("  best validation accuracy:      " + str(best_val_acc))
-            print("  test loss:                     " + str(test_loss))
-            print("  test accuracy:                 " + str(test_acc))
-
-            if train_loss > max(pre_losses):
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = param_group['lr'] * 0.9995
-            pre_losses = pre_losses[1:] + [train_loss]
-
+    parselog(args, logger)
+    logger.debug("Start...")
+    setup_seed(7)
+    classnum = 2
+    if args.gpu >= 0:
+        device = torch.device("cuda:%d"%args.gpu)
     else:
-        print("begin testing")
-        model = inception_v3()
-        model.to(device)
-        model_path = os.path.join(args.train_dir, 'checkpoint_%d.pth.tar' % args.inference_version)
-        if os.path.exists(model_path):
-            model = torch.load(model_path)
+        device = torch.device("cpu")
 
-        X_train, X_test, y_train, y_test = load_cifar_4d(args.data_dir)
+    # they are all np.array
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = load_data(args.dataset_dir, normalization=args.normalization, resize=args.resize_shape, loadnpy=args.loadnpy, npydir=os.path.join("npys", args.npydir), stack=args.stack, logger=logger)
 
-        count = 0
-        for i in range(len(X_test)):
-            test_image = X_test[i].reshape((1, 3, 32, 32))
-            result = inference(model, test_image)[0]
-            if result == y_test[i]:
-                count += 1
-        print("test accuracy: {}".format(float(count) / len(X_test)))
+    logger.debug(X_train.shape)
+    
+    if args.model.startswith("resnet"):
+        model = resnet(classnum=classnum, name=args.model, pretrain=not args.no_pretrain, stack=args.stack)
+    elif args.model.startswith("senet"):
+        model = SEnet(classnum=classnum, name=args.model, pretrain=not args.no_pretrain, stack=args.stack)
+    elif args.model.startswith("inception"):
+        model = inception(classnum=classnum, pretrain=not args.no_pretrain)
+    else:
+        assert False
+
+    logger.debug(device)
+    model.to(device)
+
+    if args.continue_train:
+        model = torch.load(os.path.join("exps", args.expname, "checkpoint_latest.pth.tar"), map_location=lambda storage, loc: storage.cuda(device))
+        
+    train_data = myDataset(X_train, Y_train, dotrans = args.augmentation, stack=args.stack)    
+    trainloader = DataLoader(train_data, batch_size = args.batchsize, shuffle = True)
+    val_data = myDataset(X_val, Y_val, dotrans = False, stack=args.stack)
+    valloader = DataLoader(val_data, batch_size = args.batchsize, shuffle = False)    
+    test_data = myDataset(X_test, Y_test, dotrans = False, stack=args.stack)
+    testloader = DataLoader(test_data, batch_size = args.batchsize, shuffle = False)    
+
+    optimizer = optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)    
+
+    logger.debug("Start Training...")
+   
+    best_val_acc = 0.0
+    best_epoch = 0
+    for epoch in range(args.start_epoch+1, args.start_epoch+args.num_epochs+1):
+        start_time = time.time()
+        train_loss, train_acc, train_auc = train_epoch(model, trainloader, optimizer, device)
+        val_loss, val_acc, val_auc = valid_epoch(model, valloader, device)
+        if val_acc >= best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch
+            test_loss, test_acc, test_auc = valid_epoch(model, testloader, device)
+            with open(os.path.join("exps", args.expname, 'checkpoint_best.pth.tar'), 'wb') as fout:
+                torch.save(model, fout)
+        with open(os.path.join("exps", args.expname, 'checkpoint_latest.pth.tar'), 'wb') as fout:
+            torch.save(model, fout)
+        epoch_time = time.time() - start_time
+
+        logger.info("Epoch %d of %d took %.4fs"%(epoch, args.num_epochs, epoch_time))
+        logger.info("  training loss:             %.4f" %(train_loss))
+        logger.info("  training accuracy:         %.4f" %(train_acc))
+        logger.info("  training auc:              %.4f" %(train_auc))
+        logger.info("  validation loss:           %.4f" %(val_loss))
+        logger.info("  validation accuracy:       %.4f" %(val_acc))
+        logger.info("  validation auc:            %.4f" %(val_auc))        
+        logger.info("  best epoch:                  %d" %(best_epoch))
+        logger.info("  best validation accuracy:  %.4f" %(best_val_acc))
+        logger.info("  test loss:                 %.4f" %(test_loss))
+        logger.info("  test accuracy:             %.4f" %(test_acc))
+        logger.info("  test auc:                  %.4f" %(test_auc))
