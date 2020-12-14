@@ -36,6 +36,8 @@ parser.add_argument('-a', '--augmentation', action="store_true", default=False, 
 parser.add_argument('--no_pretrain', action="store_true", default=False, help='do not use pretrained weights')
 parser.add_argument('--stack', action="store_true", default=False, help='stack both eyes into one image of 6 channels')
 parser.add_argument('--resize_shape', default=224, type=int, help='input image shape, -1 means using original shape')
+parser.add_argument('--mask_type', default=0, type=int, help='masking parts of the image, 0 for no masking; 1 for masking upper and lower parts; 2 for masking outer rim; 3 for masking horizontal stripe; 4 for masking central core; ')
+parser.add_argument('--mask_ratio', default=0.0, type=float, help='proportion of masked area')
 
 
 args = parser.parse_args()
@@ -153,7 +155,7 @@ if __name__ == '__main__':
         device = torch.device("cpu")
 
     # they are all np.array
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = load_data(args.dataset_dir, normalization=args.normalization, resize=args.resize_shape, loadnpy=args.loadnpy, npydir=os.path.join("npys", args.npydir), stack=args.stack, logger=logger)
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = load_data(args.dataset_dir, normalization=args.normalization, resize=args.resize_shape, loadnpy=args.loadnpy, npydir=os.path.join("npys", args.npydir), stack=args.stack, logger=logger,mask_type=args.mask_type, mask_ratio=args.mask_ratio)
 
     logger.debug(X_train.shape)
     
