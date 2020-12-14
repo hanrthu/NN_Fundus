@@ -9,8 +9,39 @@ from torch.utils.data import Dataset
 import torchvision
 from torchvision import transforms
 
+def mask(img,mask_type,mask_ratio):
+    height = img.shape[0]
+    width = img.shape[1]
+    if mask_type==1:
+        lower_limit = int(height * mask_ratio // 2 )
+        upper_limit = height - lower_limit
+        img[:lower_limit,:] = [0,0,0]
+        img[upper_limit:,:] = [0,0,0]
+    elif mask_type==2:
+        img1 = img.copy()
+        img2 = mask(img,4,1-mask_ratio)
+        img = cv2.subtract(img1, img2, dst=None, mask=None)
+        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
+        exit(0)
+    elif mask_type==3:
+        img1 = img.copy()
+        img2 = mask(img,1,1-mask_ratio)
+        img = cv2.subtract(img1, img2, dst=None, mask=None)
+        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
+        exit(0)
+    elif mask_type==4:
+        full_radius = min(height,width)//2
+        assert mask_ratio > 0
+        radius = int(math.sqrt(mask_ratio)*full_radius)
+        img = cv2.circle(img,(width//2,height//2),radius,(0),-1)
+        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
+        exit(0)
+    else:
+        print("error! mask type out of range")
+        exit(-1) 
+    return img
 
-def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False, resize=-1, loadnpy = True, npydir="baseline", stack=False, logger=None):
+def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False, resize=-1, loadnpy = True, npydir="baseline", stack=False, logger=None,mask_type=0, mask_ratio=0.0):
     logger.debug("Start to read in data...")
     if loadnpy:
         X = np.load(os.path.join(npydir, "X.npy"))
@@ -33,6 +64,8 @@ def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False,
         for img_path in img_paths:
             path = os.path.join(img_dir, img_path)
             img = cv2.imread(path)
+            if mask_type!=0:
+                img = mask(img,mask_type,mask_ratio)
             if resize != -1:
                 img = cv2.resize(img, (resize, resize))
             if normalization:
