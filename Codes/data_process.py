@@ -36,6 +36,24 @@ def mask(img,mask_type,mask_ratio):
         exit(-1) 
     return img
 
+def shuffle(X, y, shuffle_parts):
+	chunk_size = int(len(X) / shuffle_parts)
+	shuffled_range = list(range(chunk_size))
+
+	X_buffer = np.copy(X[0:chunk_size])
+	y_buffer = np.copy(y[0:chunk_size])
+
+	for k in range(shuffle_parts):
+		np.random.shuffle(shuffled_range)
+		for i in range(chunk_size):
+			X_buffer[i] = X[k * chunk_size + shuffled_range[i]]
+			y_buffer[i] = y[k * chunk_size + shuffled_range[i]]
+
+		X[k * chunk_size:(k + 1) * chunk_size] = X_buffer
+		y[k * chunk_size:(k + 1) * chunk_size] = y_buffer
+
+	return X, y
+
 def iid_split(num_samples,split_ratio,X,Y):
     pos_samples = np.where(Y==1)[0]
     neg_samples = np.where(Y==0)[0]
@@ -45,7 +63,6 @@ def iid_split(num_samples,split_ratio,X,Y):
     print("Neg Samples:",neg)
     train_pos,val_pos,test_pos = np.split(pos_samples,[int(pos*split_ratio[0]),int(pos*(split_ratio[0]+split_ratio[1]))])
     train_neg,val_neg,test_neg = np.split(neg_samples,[int(neg*split_ratio[0]),int(neg*(split_ratio[0]+split_ratio[1]))])
-    # print(np.hstack((train_pos,train_neg)))
     X = np.array(X)
     Y = np.array(Y)
     X_train = X[np.hstack((train_pos,train_neg))].astype(np.uint8)
@@ -54,10 +71,18 @@ def iid_split(num_samples,split_ratio,X,Y):
     Y_train = Y[np.hstack((train_pos,train_neg))]
     Y_val = Y[np.hstack((val_pos,val_neg))]
     Y_test = Y[np.hstack((test_pos,test_neg))]
+    X_train,Y_train = shuffle(X_train,Y_train,1)
+    X_val,Y_val = shuffle(X_val,Y_val,1)
+    X_test,Y_test = shuffle(X_test,Y_test,1)
+    return X_train, X_val, X_test, Y_train, Y_val, Y_test
 
-    # print(X_train.shape)
-    # print(Y_train.shape)
-    # print(X_train.dtype)
+def simple_split(num_samples,split_ratio,X,Y):
+    X_train = X[:int(num_samples*split_ratio[0])]
+    X_val = X[int(num_samples*split_ratio[0]): int(num_samples*(split_ratio[0]+split_ratio[1]))]
+    X_test = X[int(num_samples*(split_ratio[0]+split_ratio[1])):]
+    Y_train = Y[:int(num_samples*split_ratio[0])]
+    Y_val = Y[int(num_samples*split_ratio[0]): int(num_samples*(split_ratio[0]+split_ratio[1]))]
+    Y_test = Y[int(num_samples*(split_ratio[0]+split_ratio[1])):]
     return X_train, X_val, X_test, Y_train, Y_val, Y_test
 
 def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False, resize=-1, loadnpy = True, npydir="baseline", stack=False, logger=None,mask_type=0, mask_ratio=0.0):
@@ -121,10 +146,10 @@ def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False,
     logger.debug("Number of samples: %d" % num_samples)
     print(X.shape)
     print(Y.shape)
-    # print(X.dtype)
-    # print(Y.dtype)
     assert sum(split_ratio) == 1
     X_train, X_val, X_test, Y_train, Y_val, Y_test = iid_split(num_samples,split_ratio,X,Y)
+    # X_train, X_val, X_test, Y_train, Y_val, Y_test = simple_split(num_samples,split_ratio,X,Y)
+
     
     return X_train, X_val, X_test, Y_train, Y_val, Y_test
 

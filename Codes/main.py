@@ -97,6 +97,7 @@ def train_epoch(model, dataloader, optimizer, device):
     aucs = []
     for i, batch in enumerate(dataloader):
         X_batch, Y_batch = batch
+        # print(Y_batch)
         X_batch = X_batch.to(device)
         Y_batch = Y_batch.to(device)
         optimizer.zero_grad()
@@ -127,6 +128,7 @@ def valid_epoch(model, dataloader, device):
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
             X_batch, Y_batch = batch
+            print(Y_batch)
             X_batch = X_batch.to(device)
             Y_batch = Y_batch.to(device)
             output = model(X_batch)
@@ -194,7 +196,7 @@ if __name__ == '__main__':
         start_time = time.time()
         train_loss, train_acc, train_auc = train_epoch(model, trainloader, optimizer, device)
         val_loss, val_acc, val_auc = valid_epoch(model, valloader, device)
-        if val_auc >= best_val_acc:
+        if val_acc >= best_val_acc:
             best_val_acc = val_acc
             best_epoch = epoch
             test_loss, test_acc, test_auc = valid_epoch(model, testloader, device)
