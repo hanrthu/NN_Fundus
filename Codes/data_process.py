@@ -36,6 +36,41 @@ def mask(img,mask_type,mask_ratio):
         exit(-1) 
     return img
 
+def iid_split(num_samples,split_ratio,X,Y):
+    X = X.tolist()
+    Y = Y.tolist()
+    pos_samples = []
+    neg_samples = []
+    pos = 0
+    neg = 0
+    for i in range(len(Y)):
+        if Y[i] == 1:
+            pos_samples.append(i)
+            pos += 1
+        elif Y[i] == 0:
+            neg_samples.append(i)
+            neg += 1
+    print("Pos Samples:",pos)
+    print("Neg Samples:",neg)
+    pos = np.array(pos)
+    neg = np.array(neg)
+    train_pos,val_pos,test_pos = np.split(pos_samples,[int(pos*split_ratio[0]),int(pos*(split_ratio[0]+split_ratio[1]))])
+    train_neg,val_neg,test_neg = np.split(neg_samples,[int(neg*split_ratio[0]),int(neg*(split_ratio[0]+split_ratio[1]))])
+    # print(np.hstack((train_pos,train_neg)))
+    X = np.array(X)
+    Y = np.array(Y)
+    X_train = X[np.hstack((train_pos,train_neg))].astype(np.uint8)
+    X_val = X[np.hstack((val_pos,val_neg))].astype(np.uint8)
+    X_test = X[np.hstack((test_pos,test_neg))].astype(np.uint8)
+    Y_train = Y[np.hstack((train_pos,train_neg))]
+    Y_val = Y[np.hstack((val_pos,val_neg))]
+    Y_test = Y[np.hstack((test_pos,test_neg))]
+
+    # print(X_train.shape)
+    # print(Y_train.shape)
+    # print(X_train.dtype)
+    return X_train, X_val, X_test, Y_train, Y_val, Y_test
+
 def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False, resize=-1, loadnpy = True, npydir="baseline", stack=False, logger=None,mask_type=0, mask_ratio=0.0):
     logger.debug("Start to read in data...")
     if loadnpy:
@@ -97,13 +132,10 @@ def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False,
     logger.debug("Number of samples: %d" % num_samples)
     print(X.shape)
     print(Y.shape)
+    # print(X.dtype)
+    # print(Y.dtype)
     assert sum(split_ratio) == 1
-    X_train = X[:int(num_samples*split_ratio[0])]
-    X_val = X[int(num_samples*split_ratio[0]): int(num_samples*(split_ratio[0]+split_ratio[1]))]
-    X_test = X[int(num_samples*(split_ratio[0]+split_ratio[1])):]
-    Y_train = Y[:int(num_samples*split_ratio[0])]
-    Y_val = Y[int(num_samples*split_ratio[0]): int(num_samples*(split_ratio[0]+split_ratio[1]))]
-    Y_test = Y[int(num_samples*(split_ratio[0]+split_ratio[1])):]
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = iid_split(num_samples,split_ratio,X,Y)
     
     return X_train, X_val, X_test, Y_train, Y_val, Y_test
 

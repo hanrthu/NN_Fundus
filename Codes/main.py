@@ -188,14 +188,14 @@ if __name__ == '__main__':
 
     logger.debug("Start Training...")
    
-    best_val_auc = 0.0
+    best_val_acc = 0.0
     best_epoch = 0
     for epoch in range(args.start_epoch+1, args.start_epoch+args.num_epochs+1):
         start_time = time.time()
         train_loss, train_acc, train_auc = train_epoch(model, trainloader, optimizer, device)
         val_loss, val_acc, val_auc = valid_epoch(model, valloader, device)
-        if val_auc >= best_val_auc:
-            best_val_auc = val_auc
+        if val_auc >= best_val_acc:
+            best_val_acc = val_acc
             best_epoch = epoch
             test_loss, test_acc, test_auc = valid_epoch(model, testloader, device)
             with open(os.path.join("exps", args.expname, 'checkpoint_best.pth.tar'), 'wb') as fout:
@@ -212,7 +212,7 @@ if __name__ == '__main__':
         logger.info("  validation accuracy:       %.4f" %(val_acc))
         logger.info("  validation auc:            %.4f" %(val_auc))        
         logger.info("  best epoch:                  %d" %(best_epoch))
-        logger.info("  best validation auc:       %.4f" %(best_val_auc))
+        logger.info("  best validation accurac    %.4f" %(best_val_acc))
         logger.info("  test loss:                 %.4f" %(test_loss))
         logger.info("  test accuracy:             %.4f" %(test_acc))
         logger.info("  test auc:                  %.4f" %(test_auc))
