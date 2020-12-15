@@ -11,7 +11,7 @@ import numpy as np
 import random
 from sklearn.metrics import roc_auc_score
 from data_process import load_data, myDataset
-from model import resnet, inception, SEnet
+from model import resnet, inception, SEnet,siamese_senet
 
 import argparse
 import os
@@ -20,7 +20,7 @@ import time
 
 parser = argparse.ArgumentParser(description='resnet')
 parser.add_argument('--expname', type=str, default="null", help='Experiment name.')
-parser.add_argument('--model', default='resnet50', choices=['resnet18', 'resnet50', 'inception', 'senet18', 'senet50'], help="model name")
+parser.add_argument('--model', default='resnet50', choices=['resnet18', 'resnet50', 'inception', 'senet18', 'senet50','siamese_senet18','siamese_senet50','siamese_resnet18','siamese_resnet50'], help="model name")
 parser.add_argument('--batchsize', default=32, type=int, help='batch size when training')
 parser.add_argument('--gpu', default=0, type=int, help='gpu id, -1 means using cpu')
 parser.add_argument('--weight_decay', default=0.0, type=float, help='L2 regularizer coeficient')
@@ -35,6 +35,7 @@ parser.add_argument('-n', '--normalization', action="store_true", default=False,
 parser.add_argument('-a', '--augmentation', action="store_true", default=False, help='use data augmentation')
 parser.add_argument('--no_pretrain', action="store_true", default=False, help='do not use pretrained weights')
 parser.add_argument('--stack', action="store_true", default=False, help='stack both eyes into one image of 6 channels')
+parser.add_argument('--siamese', default='concatenation', choices=['concatenation', 'projection'], help="choose a way to do siamese network")
 parser.add_argument('--resize_shape', default=224, type=int, help='input image shape, -1 means using original shape')
 parser.add_argument('--mask_type', default=0, type=int, help='masking parts of the image, 0 for no masking; 1 for masking upper and lower parts; 2 for masking outer rim; 3 for masking horizontal stripe; 4 for masking central core; ')
 parser.add_argument('--mask_ratio', default=0.0, type=float, help='proportion of masked area')
@@ -123,22 +124,23 @@ def valid_epoch(model, dataloader, device):
     losses = []
     accs = []
     aucs = []
-    for i, batch in enumerate(dataloader):
-        X_batch, Y_batch = batch
-        X_batch = X_batch.to(device)
-        Y_batch = Y_batch.to(device)
-        output = model(X_batch)
-        loss = F.cross_entropy(output, Y_batch)
-        
-        losses.append(loss.cpu().detach())
-        proba = np.array(F.softmax(output, dim=-1)[:, 1].cpu().detach())
-        acc = calc_acc(output, Y_batch)
-        try:
-            auc = roc_auc_score(Y_batch.cpu(), proba)
-            accs.append(acc)
-            aucs.append(auc)
-        except ValueError:
-            pass
+    with torch.no_grad():
+        for i, batch in enumerate(dataloader):
+            X_batch, Y_batch = batch
+            X_batch = X_batch.to(device)
+            Y_batch = Y_batch.to(device)
+            output = model(X_batch)
+            loss = F.cross_entropy(output, Y_batch)
+            
+            losses.append(loss.cpu().detach())
+            proba = np.array(F.softmax(output, dim=-1)[:, 1].cpu().detach())
+            acc = calc_acc(output, Y_batch)
+            try:
+                auc = roc_auc_score(Y_batch.cpu(), proba)
+                accs.append(acc)
+                aucs.append(auc)
+            except ValueError:
+                pass
 
     model.train()    
     return np.array(losses).mean(), np.array(accs).mean(), np.array(aucs).mean()
@@ -158,8 +160,9 @@ if __name__ == '__main__':
     X_train, X_val, X_test, Y_train, Y_val, Y_test = load_data(args.dataset_dir, normalization=args.normalization, resize=args.resize_shape, loadnpy=args.loadnpy, npydir=os.path.join("npys", args.npydir), stack=args.stack, logger=logger,mask_type=args.mask_type, mask_ratio=args.mask_ratio)
 
     logger.debug(X_train.shape)
-    
-    if args.model.startswith("resnet"):
+    if args.model.startswith("siamese"):
+        model = siamese_senet(classnum=classnum, name=args.model, pretrain=not args.no_pretrain,siamese=args.siamese)
+    elif args.model.startswith("resnet"):
         model = resnet(classnum=classnum, name=args.model, pretrain=not args.no_pretrain, stack=args.stack)
     elif args.model.startswith("senet"):
         model = SEnet(classnum=classnum, name=args.model, pretrain=not args.no_pretrain, stack=args.stack)
@@ -185,14 +188,14 @@ if __name__ == '__main__':
 
     logger.debug("Start Training...")
    
-    best_val_acc = 0.0
+    best_val_auc = 0.0
     best_epoch = 0
     for epoch in range(args.start_epoch+1, args.start_epoch+args.num_epochs+1):
         start_time = time.time()
         train_loss, train_acc, train_auc = train_epoch(model, trainloader, optimizer, device)
         val_loss, val_acc, val_auc = valid_epoch(model, valloader, device)
-        if val_acc >= best_val_acc:
-            best_val_acc = val_acc
+        if val_auc >= best_val_auc:
+            best_val_auc = val_auc
             best_epoch = epoch
             test_loss, test_acc, test_auc = valid_epoch(model, testloader, device)
             with open(os.path.join("exps", args.expname, 'checkpoint_best.pth.tar'), 'wb') as fout:
@@ -209,7 +212,7 @@ if __name__ == '__main__':
         logger.info("  validation accuracy:       %.4f" %(val_acc))
         logger.info("  validation auc:            %.4f" %(val_auc))        
         logger.info("  best epoch:                  %d" %(best_epoch))
-        logger.info("  best validation accuracy:  %.4f" %(best_val_acc))
+        logger.info("  best validation auc:       %.4f" %(best_val_auc))
         logger.info("  test loss:                 %.4f" %(test_loss))
         logger.info("  test accuracy:             %.4f" %(test_acc))
         logger.info("  test auc:                  %.4f" %(test_auc))
