@@ -37,23 +37,12 @@ def mask(img,mask_type,mask_ratio):
     return img
 
 def iid_split(num_samples,split_ratio,X,Y):
-    X = X.tolist()
-    Y = Y.tolist()
-    pos_samples = []
-    neg_samples = []
-    pos = 0
-    neg = 0
-    for i in range(len(Y)):
-        if Y[i] == 1:
-            pos_samples.append(i)
-            pos += 1
-        elif Y[i] == 0:
-            neg_samples.append(i)
-            neg += 1
+    pos_samples = np.where(Y==1)[0]
+    neg_samples = np.where(Y==0)[0]
+    pos = pos_samples.shape[0]
+    neg = neg_samples.shape[0]
     print("Pos Samples:",pos)
     print("Neg Samples:",neg)
-    pos = np.array(pos)
-    neg = np.array(neg)
     train_pos,val_pos,test_pos = np.split(pos_samples,[int(pos*split_ratio[0]),int(pos*(split_ratio[0]+split_ratio[1]))])
     train_neg,val_neg,test_neg = np.split(neg_samples,[int(neg*split_ratio[0]),int(neg*(split_ratio[0]+split_ratio[1]))])
     # print(np.hstack((train_pos,train_neg)))
