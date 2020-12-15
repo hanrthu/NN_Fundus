@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset
 import torchvision
 from torchvision import transforms
+import math
 
 def mask(img,mask_type,mask_ratio):
     height = img.shape[0]
@@ -21,21 +22,15 @@ def mask(img,mask_type,mask_ratio):
         img1 = img.copy()
         img2 = mask(img,4,1-mask_ratio)
         img = cv2.subtract(img1, img2, dst=None, mask=None)
-        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
-        exit(0)
     elif mask_type==3:
         img1 = img.copy()
         img2 = mask(img,1,1-mask_ratio)
         img = cv2.subtract(img1, img2, dst=None, mask=None)
-        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
-        exit(0)
     elif mask_type==4:
         full_radius = min(height,width)//2
         assert mask_ratio > 0
         radius = int(math.sqrt(mask_ratio)*full_radius)
         img = cv2.circle(img,(width//2,height//2),radius,(0),-1)
-        cv2.imwrite("example_type_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
-        exit(0)
     else:
         print("error! mask type out of range")
         exit(-1) 
@@ -65,6 +60,7 @@ def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False,
             path = os.path.join(img_dir, img_path)
             img = cv2.imread(path)
             if mask_type!=0:
+                print("masking...")
                 img = mask(img,mask_type,mask_ratio)
             if resize != -1:
                 img = cv2.resize(img, (resize, resize))
@@ -73,7 +69,10 @@ def load_data(dataset_dir, split_ratio = [0.8, 0.1, 0.1], normalization = False,
             cnt += 1
             if cnt % 100 == 0:
                 logger.debug("%d/%d have been read in" % (cnt, len(Y)))
+            cv2.imwrite(img_path+"_"+str(mask_type)+"_"+str(mask_ratio)+".jpg",img)
+            exit(0)
             X.append(img)
+
 
         stacked_X = []
         stacked_Y = []
